@@ -1,0 +1,11 @@
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+
+/vendor/tesseract/*.wasm
+  Content-Type: application/wasm
+
+/vendor/tesseract/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/vendor/tessdata/*
+  Cache-Control: public, max-age=31536000, immutable
