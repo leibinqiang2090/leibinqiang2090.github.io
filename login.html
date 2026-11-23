@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4efe5" />
+    <title>形近句 · 云端访问验证</title>
+    <link rel="stylesheet" href="login.css" />
+  </head>
+  <body>
+    <main class="login-shell">
+      <section class="login-card">
+        <div class="brand-mark">Aa</div>
+        <span class="eyebrow">PRIVATE MEMORY SPACE</span>
+        <h1>进入你的形近句</h1>
+        <p class="intro">电脑和手机共用同一个云端词库。所有者使用完整权限验证码，访客使用只读验证码。</p>
+
+        <form id="loginForm">
+          <label for="accessCode">访问验证码</label>
+          <div class="code-field">
+            <input
+              id="accessCode"
+              name="code"
+              type="password"
+              inputmode="numeric"
+              autocomplete="current-password"
+              placeholder="请输入验证码"
+              maxlength="32"
+              autofocus
+              required
+            />
+            <button type="button" id="toggleCode" aria-label="显示或隐藏验证码">显示</button>
+          </div>
+          <p class="error-message" id="errorMessage" role="alert"></p>
+          <button class="login-button" type="submit" id="loginButton">
+            验证并进入
+            <span>→</span>
+          </button>
+        </form>
+
+        <div class="login-note">
+          <span class="status-dot"></span>
+          <p>
+            当前访问地址：<strong id="currentHost">—</strong><br />
+            验证成功后仅本次浏览会话有效；关闭浏览器后再次进入需要重新输入验证码。
+          </p>
+        </div>
+      </section>
+
+      <aside class="login-aside">
+        <span class="tape"></span>
+        <span class="aside-kicker">TODAY'S NOTE</span>
+        <strong>先分清，再记住。</strong>
+        <div class="word-pair">
+          <div><i>counsel</i><small>劝告</small></div>
+          <b>vs.</b>
+          <div><i>conceal</i><small>隐藏</small></div>
+        </div>
+        <p>把容易混的词，放进一个生活小场景。</p>
+      </aside>
+    </main>
+    <script src="cloud-config.js"></script>
+    <script src="login.js" defer></script>
+  </body>
+</html>
