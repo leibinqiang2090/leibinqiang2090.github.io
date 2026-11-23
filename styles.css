@@ -2062,6 +2062,13 @@ svg {
   font-size: 11px;
 }
 
+.review-done-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
 .toast {
   position: fixed;
   left: 50%;
