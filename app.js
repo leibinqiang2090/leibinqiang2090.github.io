@@ -331,6 +331,7 @@ function renderSummary() {
   $("#goalDone").textContent = completed;
   $("#goalTarget").textContent = goal;
   $("#goalProgress").style.width = `${Math.min(100, (completed / goal) * 100)}%`;
+  $("#heroReviewLabel").textContent = completed >= goal ? "继续复习" : "开始今日复习";
   $("#goalMessage").textContent = app.readOnly
     ? `访客可查看全部 ${groups.length} 组词，学习进度由所有者维护。`
     : completed >= goal
@@ -1155,8 +1156,11 @@ function startReview(groupId = null) {
             new Date(left.nextReviewAt || 0) - new Date(right.nextReviewAt || 0),
         )
       : [...groups].sort((left, right) => getMasteryLevel(left) - getMasteryLevel(right));
-    const remaining = Math.max(0, getDailyGoal() - getTodayCompleted());
-    const sessionLimit = remaining > 0 ? remaining : Math.min(getDailyGoal(), 10);
+    const goal = getDailyGoal();
+    const remaining = Math.max(0, goal - getTodayCompleted());
+    const sessionLimit = remaining > 0
+      ? remaining
+      : Math.max(10, Math.min(goal, 50));
     app.reviewQueue = source.slice(0, sessionLimit);
     app.reviewMode = due.length ? "review" : "practice";
   }
@@ -1170,12 +1174,20 @@ function startReview(groupId = null) {
 function renderReview() {
   const total = app.reviewQueue.length;
   if (app.reviewIndex >= total) {
+    const completed = getTodayCompleted();
+    const goal = getDailyGoal();
+    const nextBatch = Math.max(10, Math.min(goal, 50));
     $("#reviewBody").innerHTML = `
       <div class="review-done"><div>
         <div class="done-seal">记住了</div>
         <h3>这一轮完成了</h3>
-        <p>复习结果已同步到云端。</p>
-        <button class="primary-button" data-close="reviewModal">回到词卡</button>
+        <p>今日已完成 ${completed} / ${goal} 组。${
+          completed >= goal ? "目标已达成，可以继续巩固。" : "复习结果已同步到云端。"
+        }</p>
+        <div class="review-done-actions">
+          <button class="primary-button" data-continue-review>继续复习 ${nextBatch} 组</button>
+          <button class="soft-button" data-close="reviewModal">回到词卡</button>
+        </div>
       </div></div>`;
     return;
   }
@@ -1388,6 +1400,10 @@ function bindEvents() {
     if (event.target.closest("[data-review-next]")) {
       app.reviewIndex += 1;
       renderReview();
+      return;
+    }
+    if (event.target.closest("[data-continue-review]")) {
+      startReview();
       return;
     }
     const nextRating = event.target.closest("[data-review-next-rating]");
