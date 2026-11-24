@@ -1902,6 +1902,35 @@ svg {
   font-weight: 700;
 }
 
+.review-top-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.review-back-button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid #d7d0c4;
+  border-radius: 99px;
+  color: #315f52;
+  background: #fffdf8;
+  font-size: 10px;
+  font-weight: 700;
+  transition: border-color 160ms ease, opacity 160ms ease, transform 160ms ease;
+}
+
+.review-back-button:hover:not(:disabled) {
+  border-color: #8eb2a7;
+  transform: translateY(-1px);
+}
+
+.review-back-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.36;
+}
+
 .review-progress-wrap span {
   display: block;
   margin-bottom: 8px;
