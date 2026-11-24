@@ -15,6 +15,7 @@ const app = {
   answerSelected: false,
   reviewMode: "queue",
   readOnly: false,
+  advanceTimer: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -1167,12 +1168,15 @@ function startReview(groupId = null) {
   app.reviewIndex = 0;
   app.reviewRevealed = false;
   app.ratingInProgress = false;
+  clearTimeout(app.advanceTimer);
   $("#reviewModal").hidden = false;
   renderReview();
 }
 
 function renderReview() {
   const total = app.reviewQueue.length;
+  $("#reviewPreviousButton").hidden = total === 0;
+  $("#reviewPreviousButton").disabled = app.reviewIndex <= 0 || total === 0;
   if (app.reviewIndex >= total) {
     const completed = getTodayCompleted();
     const goal = getDailyGoal();
@@ -1185,6 +1189,7 @@ function renderReview() {
           completed >= goal ? "目标已达成，可以继续巩固。" : "复习结果已同步到云端。"
         }</p>
         <div class="review-done-actions">
+          <button class="soft-button" data-review-previous>返回上一个单词</button>
           <button class="primary-button" data-continue-review>继续复习 ${nextBatch} 组</button>
           <button class="soft-button" data-close="reviewModal">回到词卡</button>
         </div>
@@ -1237,6 +1242,17 @@ function renderReview() {
       <div id="learnAnswer"></div>
     </div>
   `;
+}
+
+function showPreviousReviewWord() {
+  if (!app.reviewQueue.length || app.reviewIndex <= 0) {
+    return;
+  }
+  clearTimeout(app.advanceTimer);
+  app.reviewIndex = Math.min(app.reviewIndex - 1, app.reviewQueue.length - 1);
+  app.reviewRevealed = false;
+  app.answerSelected = false;
+  renderReview();
 }
 
 function recordMasteryRating(rating) {
@@ -1302,7 +1318,8 @@ function answerReview(button) {
         <span>即将进入下一词…</span>
       </div>
     `;
-    setTimeout(() => {
+    clearTimeout(app.advanceTimer);
+    app.advanceTimer = setTimeout(() => {
       app.reviewIndex += 1;
       renderReview();
     }, 650);
@@ -1395,6 +1412,10 @@ function bindEvents() {
     const reviewAnswer = event.target.closest("[data-review-answer]");
     if (reviewAnswer) {
       answerReview(reviewAnswer);
+      return;
+    }
+    if (event.target.closest("[data-review-previous]")) {
+      showPreviousReviewWord();
       return;
     }
     if (event.target.closest("[data-review-next]")) {
