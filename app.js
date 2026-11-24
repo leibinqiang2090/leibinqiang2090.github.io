@@ -1134,6 +1134,48 @@ function showCorrections() {
   $("#correctionModal").hidden = false;
 }
 
+function uniqueReviewGroups(groups) {
+  const seenWords = new Set();
+  return groups.filter((group) => {
+    const key = normalizeSpaces(getMainWord(group)).toLowerCase();
+    if (!key || seenWords.has(key)) {
+      return false;
+    }
+    seenWords.add(key);
+    return true;
+  });
+}
+
+function reviewedWordsToday() {
+  const groups = app.state?.groups || [];
+  const reviewedGroupIds = new Set(
+    (app.state?.studyHistory || [])
+      .filter((entry) => entry?.at && isToday(entry.at))
+      .map((entry) => entry.groupId),
+  );
+  return new Set(
+    groups
+      .filter((group) => reviewedGroupIds.has(group.id))
+      .map((group) => normalizeSpaces(getMainWord(group)).toLowerCase()),
+  );
+}
+
+function unreviewedReviewGroups() {
+  const reviewed = reviewedWordsToday();
+  return uniqueReviewGroups(
+    (app.state?.groups || []).filter((group) => {
+      const key = normalizeSpaces(getMainWord(group)).toLowerCase();
+      return reviewed.size === 0 || !reviewed.has(key);
+    }),
+  );
+}
+
+function nextReviewBatchSize() {
+  const configured = Math.max(10, Math.min(getDailyGoal(), 50));
+  const unseen = unreviewedReviewGroups().length;
+  return unseen > 0 ? Math.min(unseen, configured) : configured;
+}
+
 function startReview(groupId = null) {
   const groups = app.state?.groups || [];
   if (!groups.length) {
@@ -1149,19 +1191,23 @@ function startReview(groupId = null) {
     app.reviewQueue = [...groups].sort(() => Math.random() - 0.5).slice(0, 10);
     app.reviewMode = "guest";
   } else {
-    const due = groups.filter(isDue);
-    const source = due.length
-      ? due.sort(
-          (left, right) =>
-            getMasteryLevel(left) - getMasteryLevel(right) ||
-            new Date(left.nextReviewAt || 0) - new Date(right.nextReviewAt || 0),
-        )
-      : [...groups].sort((left, right) => getMasteryLevel(left) - getMasteryLevel(right));
+    const unseenGroups = unreviewedReviewGroups();
+    const candidates = unseenGroups.length ? unseenGroups : uniqueReviewGroups(groups);
+    const due = candidates.filter(isDue);
+    const source = [
+      ...due,
+      ...candidates.filter((group) => !isDue(group)),
+    ].sort(
+      (left, right) =>
+        getMasteryLevel(left) - getMasteryLevel(right) ||
+        new Date(left.nextReviewAt || 0) - new Date(right.nextReviewAt || 0),
+    );
     const goal = getDailyGoal();
     const remaining = Math.max(0, goal - getTodayCompleted());
-    const sessionLimit = remaining > 0
-      ? remaining
-      : Math.max(10, Math.min(goal, 50));
+    const sessionLimit = Math.min(
+      source.length,
+      remaining > 0 ? remaining : nextReviewBatchSize(),
+    );
     app.reviewQueue = source.slice(0, sessionLimit);
     app.reviewMode = due.length ? "review" : "practice";
   }
@@ -1180,7 +1226,8 @@ function renderReview() {
   if (app.reviewIndex >= total) {
     const completed = getTodayCompleted();
     const goal = getDailyGoal();
-    const nextBatch = Math.max(10, Math.min(goal, 50));
+    const nextBatch = nextReviewBatchSize();
+    const unseenCount = unreviewedReviewGroups().length;
     $("#reviewBody").innerHTML = `
       <div class="review-done"><div>
         <div class="done-seal">记住了</div>
@@ -1190,7 +1237,9 @@ function renderReview() {
         }</p>
         <div class="review-done-actions">
           <button class="soft-button" data-review-previous>返回上一个单词</button>
-          <button class="primary-button" data-continue-review>继续复习 ${nextBatch} 组</button>
+          <button class="primary-button" data-continue-review>${
+            unseenCount > 0 ? `继续复习 ${nextBatch} 组` : "再复习一轮"
+          }</button>
           <button class="soft-button" data-close="reviewModal">回到词卡</button>
         </div>
       </div></div>`;
