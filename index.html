@@ -275,9 +275,14 @@
             <span id="reviewProgressText">1 / 3</span>
             <div class="review-progress"><i id="reviewProgressBar"></i></div>
           </div>
-          <button class="icon-button modal-close" data-close="reviewModal" aria-label="结束">
-            <svg><use href="#icon-close"></use></svg>
-          </button>
+          <div class="review-top-actions">
+            <button class="review-back-button" id="reviewPreviousButton" data-review-previous>
+              ← 上一个
+            </button>
+            <button class="icon-button modal-close" data-close="reviewModal" aria-label="结束">
+              <svg><use href="#icon-close"></use></svg>
+            </button>
+          </div>
         </div>
         <div class="review-body" id="reviewBody"></div>
       </section>
