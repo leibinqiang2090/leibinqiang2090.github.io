@@ -5,6 +5,7 @@ const app = {
   dirty: false,
   busy: false,
   saving: false,
+  saveGeneration: 0,
   saveTimer: null,
   syncTimer: null,
   ocrWorker: null,
@@ -287,6 +288,7 @@ async function loadCloud(showToast = false) {
 
 function scheduleSave() {
   app.dirty = true;
+  app.saveGeneration += 1;
   cacheState();
   clearTimeout(app.saveTimer);
   app.saveTimer = setTimeout(saveCloud, 450);
@@ -296,6 +298,7 @@ async function saveCloud() {
   if (!app.state || app.saving) {
     return;
   }
+  const saveGeneration = app.saveGeneration;
   app.saving = true;
   setCloudStatus("正在保存…", "sync-saving");
   try {
@@ -303,11 +306,22 @@ async function saveCloud() {
       method: "PUT",
       body: JSON.stringify(serializableState()),
     });
-    app.state = state;
-    app.dirty = false;
+    if (saveGeneration === app.saveGeneration) {
+      app.state = state;
+      app.dirty = false;
+    } else {
+      // Preserve changes made while this request was in flight.
+      app.state.revision = state.revision;
+      app.state.updatedAt = state.updatedAt;
+      app.state.accessRole = state.accessRole;
+      app.dirty = true;
+    }
     cacheState();
     renderSummary();
-    setCloudStatus("已保存到云端", "sync-saved");
+    setCloudStatus(
+      app.dirty ? "有新进度待保存…" : "已保存到云端",
+      app.dirty ? "sync-saving" : "sync-saved",
+    );
   } catch (error) {
     setCloudStatus("等待重新同步", "sync-saving");
     toast(`保存失败：${error.message}`);
@@ -315,7 +329,7 @@ async function saveCloud() {
     app.saving = false;
     if (app.dirty) {
       clearTimeout(app.saveTimer);
-      app.saveTimer = setTimeout(saveCloud, 1800);
+      app.saveTimer = setTimeout(saveCloud, 250);
     }
   }
 }
