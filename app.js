@@ -15,6 +15,10 @@ const app = {
   reviewRevealed: false,
   answerSelected: false,
   reviewMode: "queue",
+  sessionKind: "standard",
+  sessionCorrect: 0,
+  sessionWrong: 0,
+  challengeMode: false,
   readOnly: false,
   advanceTimer: null,
 };
@@ -23,6 +27,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const CACHE_KEY = "xingjinju-cloud-cache-v1";
 const SESSION_TOKEN_KEY = "xingjinju-session-token";
+const CHALLENGE_KEY = "xingjinju-pending-challenge";
 const CLOUD_CONFIG = window.XINGJINJU_CONFIG || {};
 
 function appUrl(path = "") {
@@ -142,7 +147,12 @@ function isToday(value) {
 }
 
 function getTodayCompleted() {
-  return (app.state?.studyHistory || []).filter((entry) => entry?.at && isToday(entry.at)).length;
+  return (app.state?.studyHistory || []).filter(
+    (entry) =>
+      entry?.at &&
+      isToday(entry.at) &&
+      ["again", "hard", "good"].includes(entry.rating),
+  ).length;
 }
 
 function toast(message) {
@@ -562,6 +572,7 @@ function renderAll() {
     button.classList.toggle("active", button.dataset.filter === app.filter);
   });
   renderCorrectionPanel();
+  renderConfusionMap();
 }
 
 function renderCorrectionPanel() {
@@ -579,6 +590,7 @@ function switchView(name) {
   });
   $$(".view").forEach((view) => view.classList.remove("active"));
   $(`#${name}View`).classList.add("active");
+  if (name === "studio") renderConfusionMap();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1190,6 +1202,221 @@ function nextReviewBatchSize() {
   return unseen > 0 ? Math.min(unseen, configured) : configured;
 }
 
+function recordConfusionEvent(group, selectedWord) {
+  if (app.readOnly || app.challengeMode) return;
+  const correctWord = getMainWord(group);
+  if (!selectedWord || selectedWord === correctWord) return;
+  app.state.studyHistory = [
+    ...(app.state.studyHistory || []),
+    {
+      at: new Date().toISOString(),
+      type: "confusion",
+      groupId: group.id,
+      selectedWord,
+      correctWord,
+    },
+  ].slice(-500);
+  renderConfusionMap();
+  scheduleSave();
+}
+
+function confusionPairs() {
+  const groupsById = new Map((app.state?.groups || []).map((group) => [group.id, group]));
+  const pairs = new Map();
+  for (const event of app.state?.studyHistory || []) {
+    if (event?.type !== "confusion" || !event.selectedWord || !event.correctWord) continue;
+    const key = `${event.correctWord}→${event.selectedWord}`;
+    const current = pairs.get(key) || {
+      key,
+      correctWord: event.correctWord,
+      selectedWord: event.selectedWord,
+      count: 0,
+      lastAt: event.at,
+      groupIds: new Set(),
+    };
+    current.count += 1;
+    current.groupIds.add(event.groupId);
+    if (new Date(event.at) > new Date(current.lastAt)) current.lastAt = event.at;
+    pairs.set(key, current);
+  }
+  return [...pairs.values()]
+    .map((pair) => ({
+      ...pair,
+      groupIds: [...pair.groupIds].filter((id) => groupsById.has(id)),
+    }))
+    .sort((left, right) => right.count - left.count || new Date(right.lastAt) - new Date(left.lastAt));
+}
+
+function renderConfusionMap() {
+  const container = $("#confusionMapContent");
+  const summary = $("#confusionMapSummary");
+  if (!container || !summary) return;
+  const pairs = confusionPairs();
+  const events = pairs.reduce((total, pair) => total + pair.count, 0);
+  summary.textContent = pairs.length
+    ? `共记录 ${events} 次混淆，涉及 ${pairs.length} 组词义关系。`
+    : "还没有混淆记录。复习时答错一次，这里就会自动形成你的词义关系图。";
+  if (!pairs.length) {
+    container.innerHTML =
+      '<div class="confusion-map-empty">先从一题开始，系统会记录你究竟把哪个词认成了哪个词。</div>';
+    return;
+  }
+  const maxCount = pairs[0].count;
+  container.innerHTML = pairs
+    .slice(0, 8)
+    .map(
+      (pair, index) => `
+        <div class="confusion-pair">
+          <span class="confusion-rank">${String(index + 1).padStart(2, "0")}</span>
+          <div class="confusion-pair-words">
+            <b>${escapeHtml(pair.correctWord)}</b>
+            <span>被认成</span>
+            <em>${escapeHtml(pair.selectedWord)}</em>
+          </div>
+          <div class="confusion-meter"><i style="width:${Math.max(12, (pair.count / maxCount) * 100)}%"></i></div>
+          <strong>${pair.count} 次</strong>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function startConfusionDrill() {
+  const pairs = confusionPairs();
+  if (!pairs.length) {
+    toast("还没有混淆记录，先完成几道复习题");
+    return;
+  }
+  const ids = [...new Set(pairs.flatMap((pair) => pair.groupIds))];
+  const queue = uniqueReviewGroups(
+    ids.map((id) => app.state.groups.find((group) => group.id === id)).filter(Boolean),
+  ).slice(0, 10);
+  if (!queue.length) {
+    toast("暂时没有可重练的词组");
+    return;
+  }
+  openReviewSession(queue, "standard", "confusions", "重练专属混淆词");
+}
+
+function encodeChallengeCode(ids) {
+  const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, ids }));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeChallengeCode(code) {
+  const padded = String(code || "").replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4));
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function makeChallengeLink() {
+  const queue = uniqueReviewGroups([...unreviewedReviewGroups(), ...app.state.groups])
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 10);
+  if (!queue.length) return "";
+  const link = new URL(appUrl("index.html"));
+  link.searchParams.set("challenge", encodeChallengeCode(queue.map((group) => group.id)));
+  return link.href;
+}
+
+function openChallengeModal() {
+  const link = makeChallengeLink();
+  if (!link) {
+    toast("词库为空，暂时无法生成挑战");
+    return;
+  }
+  $("#challengeLink").value = link;
+  $("#challengeModal").hidden = false;
+}
+
+function startChallengeFromCode(code) {
+  try {
+    const payload = decodeChallengeCode(code);
+    const ids = Array.isArray(payload?.ids) ? payload.ids : [];
+    const queue = uniqueReviewGroups(
+      ids.map((id) => app.state.groups.find((group) => group.id === id)).filter(Boolean),
+    );
+    if (!queue.length) throw new Error("empty challenge");
+    openReviewSession(queue, "challenge", "challenge", "好友 10 词挑战");
+  } catch {
+    toast("挑战链接已失效或词库已更新");
+  }
+}
+
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildDetectiveQuestion(group) {
+  const contrastItems = group.contrast?.items || [];
+  const usable = contrastItems.filter(
+    (entry) =>
+      entry.word &&
+      entry.example &&
+      new RegExp(`\\b${escapeRegExp(entry.word)}\\b`, "i").test(entry.example),
+  );
+  if (usable.length < 2) return null;
+  const target = usable[Math.floor(Math.random() * usable.length)];
+  const imposters = contrastItems.filter(
+    (entry) =>
+      entry.word &&
+      entry.word !== target.word &&
+      !new RegExp(`\\b${escapeRegExp(entry.word)}\\b`, "i").test(target.example),
+  );
+  if (!imposters.length) return null;
+  const imposter = imposters[Math.floor(Math.random() * imposters.length)];
+  const sentence = target.example.replace(
+    new RegExp(`\\b${escapeRegExp(target.word)}\\b`, "i"),
+    imposter.word,
+  );
+  return { group, target, imposter, sentence };
+}
+
+function startDetectiveSession() {
+  const questions = (app.state?.groups || [])
+    .map(buildDetectiveQuestion)
+    .filter(Boolean)
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 10);
+  if (!questions.length) {
+    toast("当前词条还没有可用的英文例句");
+    return;
+  }
+  openReviewSession(questions, "detective", "detective", "形近词侦探");
+}
+
+function startAudioRecall() {
+  const unseen = unreviewedReviewGroups();
+  const queue = uniqueReviewGroups(
+    [...unseen, ...(app.state?.groups || [])].sort(() => Math.random() - 0.5),
+  ).slice(0, 10);
+  if (!queue.length) {
+    toast("词库为空，暂时无法开始听音回忆");
+    return;
+  }
+  openReviewSession(queue, "audio", "audio", "一分钟语音回忆");
+  playAmerican(getMainWord(queue[0]));
+}
+
+function openReviewSession(queue, kind, mode, title) {
+  clearTimeout(app.advanceTimer);
+  app.reviewQueue = queue;
+  app.reviewIndex = 0;
+  app.reviewRevealed = false;
+  app.answerSelected = false;
+  app.sessionKind = kind;
+  app.reviewMode = mode;
+  app.challengeMode = kind === "challenge";
+  app.sessionCorrect = 0;
+  app.sessionWrong = 0;
+  $("#reviewTitle").textContent = title;
+  $("#reviewModal").hidden = false;
+  renderReview();
+}
+
 function startReview(groupId = null) {
   const groups = app.state?.groups || [];
   if (!groups.length) {
@@ -1225,12 +1452,7 @@ function startReview(groupId = null) {
     app.reviewQueue = source.slice(0, sessionLimit);
     app.reviewMode = due.length ? "review" : "practice";
   }
-  app.reviewIndex = 0;
-  app.reviewRevealed = false;
-  app.ratingInProgress = false;
-  clearTimeout(app.advanceTimer);
-  $("#reviewModal").hidden = false;
-  renderReview();
+  openReviewSession(app.reviewQueue, "standard", app.reviewMode, "先想意思，再揭晓");
 }
 
 function renderReview() {
@@ -1238,6 +1460,10 @@ function renderReview() {
   $("#reviewPreviousButton").hidden = total === 0;
   $("#reviewPreviousButton").disabled = app.reviewIndex <= 0 || total === 0;
   if (app.reviewIndex >= total) {
+    if (app.sessionKind !== "standard") {
+      renderTrainingDone();
+      return;
+    }
     const completed = getTodayCompleted();
     const goal = getDailyGoal();
     const nextBatch = nextReviewBatchSize();
@@ -1259,6 +1485,14 @@ function renderReview() {
       </div></div>`;
     return;
   }
+  if (app.sessionKind === "detective") {
+    renderDetectiveReview();
+    return;
+  }
+  if (app.sessionKind === "audio") {
+    renderAudioRecallReview();
+    return;
+  }
   const group = app.reviewQueue[app.reviewIndex];
   const main = getMainWord(group);
   const mastery = masteryMeta(group);
@@ -1277,7 +1511,11 @@ function renderReview() {
               ? "到期复习"
               : app.reviewMode === "guest"
                 ? "访客练习 · 不记录"
-                : "自由复习"
+                : app.reviewMode === "challenge"
+                  ? "好友挑战 · 不记录进度"
+                  : app.reviewMode === "confusions"
+                    ? "专属混淆重练"
+                    : "自由复习"
         }</span>
       </div>
       <div class="learn-word-stage">
@@ -1294,7 +1532,7 @@ function renderReview() {
               (entry, index) => `
                 <button class="meaning-option" data-review-answer="${index}" data-correct="${
                   entry.correct ? "true" : "false"
-                }">
+                }" data-word="${escapeHtml(entry.word)}">
                   ${escapeHtml(entry.meaning || "释义待补")}
                 </button>
               `,
@@ -1305,6 +1543,149 @@ function renderReview() {
       <div id="learnAnswer"></div>
     </div>
   `;
+}
+
+function renderDetectiveReview() {
+  const question = app.reviewQueue[app.reviewIndex];
+  const total = app.reviewQueue.length;
+  app.answerSelected = false;
+  $("#reviewProgressText").textContent = `${app.reviewIndex + 1} / ${total}`;
+  $("#reviewProgressBar").style.width = `${(app.reviewIndex / total) * 100}%`;
+  $("#reviewBody").innerHTML = `
+    <div class="detective-stage">
+      <div class="learn-session-meta">
+        <span class="badge mastery-status mastery-learning">侦探任务</span>
+        <span>找出句子里混进来的冒牌词</span>
+      </div>
+      <span class="section-kicker">FIND THE IMPOSTER</span>
+      <blockquote class="detective-sentence">${escapeHtml(question.sentence)}</blockquote>
+      <p class="learn-hint">哪个词最不该出现在这句话里？</p>
+      <div class="meaning-options detective-options">
+        ${[...question.group.words]
+          .sort(() => Math.random() - 0.5)
+          .map(
+            (entry) => `
+              <button class="meaning-option" data-detective-answer data-word="${escapeHtml(
+                entry.word,
+              )}" data-correct="${entry.word === question.imposter.word ? "true" : "false"}">
+                ${escapeHtml(entry.word)}
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+      <div id="learnAnswer"></div>
+    </div>
+  `;
+}
+
+function answerDetective(button) {
+  if (app.answerSelected) return;
+  app.answerSelected = true;
+  const question = app.reviewQueue[app.reviewIndex];
+  const isCorrect = button.dataset.correct === "true";
+  $$(".detective-options .meaning-option").forEach((option) => {
+    option.disabled = true;
+    if (option.dataset.correct === "true") option.classList.add("correct");
+    if (option === button && !isCorrect) option.classList.add("wrong");
+  });
+  if (isCorrect) {
+    app.sessionCorrect += 1;
+    $("#learnAnswer").innerHTML = `
+      <div class="answer-feedback correct-feedback">
+        <strong>侦探找到了：${escapeHtml(question.imposter.word)} 是冒牌词</strong>
+        <span>原句应该使用 ${escapeHtml(question.target.word)}。即将进入下一题…</span>
+      </div>
+    `;
+    clearTimeout(app.advanceTimer);
+    app.advanceTimer = setTimeout(advanceReview, 900);
+    return;
+  }
+  app.sessionWrong += 1;
+  $("#learnAnswer").innerHTML = `
+    <div class="learn-answer-panel wrong-answer-panel">
+      <div class="answer-feedback wrong-feedback">
+        <strong>冒牌词是 ${escapeHtml(question.imposter.word)}</strong>
+        <span>这句话原本应该使用 ${escapeHtml(question.target.word)}。</span>
+      </div>
+      <div class="detective-answer-card">
+        <p class="detective-original"><strong>原句：</strong>${escapeHtml(question.target.example)}</p>
+        <p class="detective-translation">${escapeHtml(question.target.exampleCn || "")}</p>
+      </div>
+      ${renderContrast(question.group)}
+      <div class="wrong-answer-footer">
+        <span>看完原句和辨析后继续下一题。</span>
+        <button class="primary-button" data-review-next>看完，下一题</button>
+      </div>
+    </div>
+  `;
+  requestAnimationFrame(() => $("#learnAnswer")?.scrollIntoView({ behavior: "smooth" }));
+}
+
+function renderAudioRecallReview() {
+  const group = app.reviewQueue[app.reviewIndex];
+  const total = app.reviewQueue.length;
+  const main = getMainWord(group);
+  const mainEntry = group.words.find((entry) => entry.correct) || group.words[0];
+  $("#reviewProgressText").textContent = `${app.reviewIndex + 1} / ${total}`;
+  $("#reviewProgressBar").style.width = `${(app.reviewIndex / total) * 100}%`;
+  $("#reviewBody").innerHTML = `
+    <div class="audio-recall-stage">
+      <div class="learn-session-meta">
+        <span class="badge mastery-status mastery-learning">听音回想</span>
+        <span>先听美音，在脑中回想单词和意思</span>
+      </div>
+      <button class="audio-recall-orb" data-audio-play>
+        <svg><use href="#icon-volume"></use></svg>
+      </button>
+      <p class="audio-recall-prompt">点击重播，想好后再揭晓</p>
+      <div class="audio-answer" hidden>
+        <span class="section-kicker">THE ANSWER</span>
+        <h3>${escapeHtml(main)}</h3>
+        <p class="recall-prompt">${escapeHtml(group.phonetic || "")}</p>
+        <p class="audio-meaning">${escapeHtml(
+          mainEntry?.meaning || "释义待补",
+        )}</p>
+        ${
+          mainEntry?.example
+            ? `<div class="audio-example"><p>${escapeHtml(
+                mainEntry.example,
+              )}</p><span>${escapeHtml(mainEntry.exampleCn || "")}</span></div>`
+            : ""
+        }
+      </div>
+      <div class="audio-actions">
+        <button class="soft-button" data-audio-reveal>显示答案</button>
+        <button class="primary-button" data-review-next>下一个</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderTrainingDone() {
+  const total = app.reviewQueue.length;
+  const isScored = ["detective", "challenge"].includes(app.sessionKind);
+  const title = app.sessionKind === "challenge" ? "挑战完成" : "训练完成";
+  $("#reviewBody").innerHTML = `
+    <div class="review-done"><div>
+      <div class="done-seal">${isScored ? "完成" : "听完"}</div>
+      <h3>${title}</h3>
+      <p>${
+        isScored
+          ? `答对 ${app.sessionCorrect} / ${total}，答错 ${app.sessionWrong}。`
+          : `已完成 ${total} 个词的听音回想。`
+      }${app.sessionKind === "challenge" ? " 挑战结果不会写入学习进度。" : ""}</p>
+      <div class="review-done-actions">
+        <button class="primary-button" data-close="reviewModal">回到词卡</button>
+      </div>
+    </div></div>
+  `;
+}
+
+function advanceReview() {
+  clearTimeout(app.advanceTimer);
+  app.reviewIndex += 1;
+  renderReview();
 }
 
 function showPreviousReviewWord() {
@@ -1320,7 +1701,7 @@ function showPreviousReviewWord() {
 
 function recordMasteryRating(rating) {
   const group = app.reviewQueue[app.reviewIndex];
-  if (app.readOnly) {
+  if (app.readOnly || app.challengeMode) {
     return masteryMeta(group);
   }
   const currentLevel = getMasteryLevel(group);
@@ -1373,8 +1754,15 @@ function answerReview(button) {
     if (!isCorrect && option.dataset.correct === "true") option.classList.add("correct");
   });
   if (isCorrect) {
+    if (app.challengeMode) app.sessionCorrect += 1;
     const nextMeta = recordMasteryRating("good");
-    toast(app.readOnly ? "回答正确，访客练习不记录进度" : `回答正确，已记录：${nextMeta.label}`);
+    toast(
+      app.readOnly
+        ? "回答正确，访客练习不记录进度"
+        : app.challengeMode
+          ? "挑战回答正确"
+          : `回答正确，已记录：${nextMeta.label}`,
+    );
     $("#learnAnswer").innerHTML = `
       <div class="answer-feedback correct-feedback">
         <strong>回答正确</strong>
@@ -1382,13 +1770,12 @@ function answerReview(button) {
       </div>
     `;
     clearTimeout(app.advanceTimer);
-    app.advanceTimer = setTimeout(() => {
-      app.reviewIndex += 1;
-      renderReview();
-    }, 650);
+    app.advanceTimer = setTimeout(advanceReview, 650);
     return;
   }
 
+  if (app.challengeMode) app.sessionWrong += 1;
+  recordConfusionEvent(group, button.dataset.word);
   app.reviewRevealed = true;
   $("#learnAnswer").innerHTML = `
     <div class="learn-answer-panel wrong-answer-panel">
@@ -1400,8 +1787,10 @@ function answerReview(button) {
       ${renderContrast(group)}
       <div class="wrong-answer-footer">
         ${
-          app.readOnly
-            ? `<span>访客练习不记录完成状态。</span>
+          app.readOnly || app.challengeMode
+            ? `<span>${
+                app.challengeMode ? "挑战模式不记录学习进度。" : "访客练习不记录完成状态。"
+              }</span>
                <button class="primary-button" data-review-next>看完，下一词</button>`
             : `<span>看完答案后，选择你对这个词的实际掌握程度：</span>
                <div class="footer-actions">
@@ -1477,13 +1866,27 @@ function bindEvents() {
       answerReview(reviewAnswer);
       return;
     }
+    const detectiveAnswer = event.target.closest("[data-detective-answer]");
+    if (detectiveAnswer) {
+      answerDetective(detectiveAnswer);
+      return;
+    }
+    if (event.target.closest("[data-audio-play]")) {
+      playAmerican(getMainWord(app.reviewQueue[app.reviewIndex]));
+      return;
+    }
+    if (event.target.closest("[data-audio-reveal]")) {
+      const answer = $(".audio-answer");
+      if (answer) answer.hidden = false;
+      event.target.closest("[data-audio-reveal]").textContent = "答案已显示";
+      return;
+    }
     if (event.target.closest("[data-review-previous]")) {
       showPreviousReviewWord();
       return;
     }
     if (event.target.closest("[data-review-next]")) {
-      app.reviewIndex += 1;
-      renderReview();
+      advanceReview();
       return;
     }
     if (event.target.closest("[data-continue-review]")) {
@@ -1494,8 +1897,7 @@ function bindEvents() {
     if (nextRating) {
       const nextMeta = recordMasteryRating(nextRating.dataset.reviewNextRating);
       toast(`已记录：${nextMeta.label}`);
-      app.reviewIndex += 1;
-      renderReview();
+      advanceReview();
       return;
     }
     if (event.target.closest("[data-review-speak]")) {
@@ -1510,6 +1912,21 @@ function bindEvents() {
   $("#newGroupButton").addEventListener("click", () => openEdit());
   $("#heroReviewButton").addEventListener("click", () => startReview());
   $("#reviewNav").addEventListener("click", () => startReview());
+  $("#detectiveButton").addEventListener("click", startDetectiveSession);
+  $("#audioRecallButton").addEventListener("click", startAudioRecall);
+  $("#challengeButton").addEventListener("click", openChallengeModal);
+  $("#confusionDrillButton").addEventListener("click", startConfusionDrill);
+  $("#copyChallengeButton").addEventListener("click", async () => {
+    const link = $("#challengeLink").value;
+    try {
+      await navigator.clipboard.writeText(link);
+      toast("挑战链接已复制");
+    } catch {
+      $("#challengeLink").select();
+      document.execCommand("copy");
+      toast("挑战链接已复制");
+    }
+  });
   $("#syncButton").addEventListener("click", () => loadCloud(true));
   $("#quickSyncButton").addEventListener("click", () => loadCloud(true));
   $("#groupForm").addEventListener("submit", saveEditedGroup);
@@ -1548,12 +1965,24 @@ function bindEvents() {
 }
 
 async function init() {
+  const incomingUrl = new URL(location.href);
+  const incomingChallenge = incomingUrl.searchParams.get("challenge");
+  if (incomingChallenge) {
+    sessionStorage.setItem(CHALLENGE_KEY, incomingChallenge);
+    incomingUrl.searchParams.delete("challenge");
+    history.replaceState({}, "", incomingUrl.href);
+  }
   if (!sessionToken()) {
     location.replace(appUrl("login.html"));
     return;
   }
   bindEvents();
   await loadCloud(false);
+  const pendingChallenge = sessionStorage.getItem(CHALLENGE_KEY);
+  if (pendingChallenge) {
+    sessionStorage.removeItem(CHALLENGE_KEY);
+    startChallengeFromCode(pendingChallenge);
+  }
   app.syncTimer = setInterval(() => {
     if (!document.hidden && !app.dirty && !app.saving) loadCloud(false);
   }, 30000);
