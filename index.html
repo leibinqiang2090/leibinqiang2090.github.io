@@ -76,6 +76,9 @@
           <button class="nav-item" id="reviewNav">
             <svg><use href="#icon-spark"></use></svg><span>快速复习</span>
           </button>
+          <button class="nav-item" data-nav="studio">
+            <svg><use href="#icon-search"></use></svg><span>训练实验室</span>
+          </button>
         </nav>
         <div class="sidebar-note">
           <div class="note-pin"></div>
@@ -231,6 +234,51 @@
             <button class="soft-button" id="toggleCorrectionsButton">查看清单</button>
           </div>
         </section>
+
+        <section class="view" id="studioView">
+          <div class="page-heading">
+            <div>
+              <span class="eyebrow">MEMORY LAB · ACTIVE RECALL</span>
+              <h1>训练实验室</h1>
+              <p>把“看懂”升级成“分得清、想得起、用得上”。</p>
+            </div>
+          </div>
+
+          <div class="studio-grid">
+            <article class="studio-tool studio-detective">
+              <span class="studio-number">01</span>
+              <span class="section-kicker">FIND THE IMPOSTER</span>
+              <h2>形近词侦探</h2>
+              <p>从一句英文中找出被错误替换的冒牌词。答错后会展开原句、翻译和整组辨析。</p>
+              <button class="primary-button" id="detectiveButton">开始 10 题侦探任务</button>
+            </article>
+
+            <article class="studio-tool studio-audio">
+              <span class="studio-number">02</span>
+              <span class="section-kicker">LISTEN &amp; RECALL</span>
+              <h2>一分钟语音回忆</h2>
+              <p>只听美式发音，不先看单词。先回想，再揭晓释义和生活例句。</p>
+              <button class="primary-button" id="audioRecallButton">开始听音回想</button>
+            </article>
+
+            <article class="studio-tool studio-challenge">
+              <span class="studio-number">03</span>
+              <span class="section-kicker">FRIEND CHALLENGE</span>
+              <h2>好友 10 词挑战</h2>
+              <p>随机抽取 10 个词生成挑战链接。朋友用访客验证码进入，不会改动你的学习进度。</p>
+              <button class="primary-button" id="challengeButton">生成挑战链接</button>
+            </article>
+
+            <article class="studio-tool studio-confusions">
+              <span class="studio-number">04</span>
+              <span class="section-kicker">CONFUSION MAP</span>
+              <h2>我的混淆地图</h2>
+              <p id="confusionMapSummary">正在整理你的易混词关系…</p>
+              <div class="confusion-map" id="confusionMapContent"></div>
+              <button class="soft-button" id="confusionDrillButton">重练最易混的词</button>
+            </article>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -270,7 +318,7 @@
     <div class="modal-backdrop review-backdrop" id="reviewModal" hidden>
       <section class="review-card" role="dialog" aria-modal="true">
         <div class="review-top">
-          <div><span class="section-kicker">QUICK RECALL</span><h2>先想意思，再揭晓</h2></div>
+          <div><span class="section-kicker">QUICK RECALL</span><h2 id="reviewTitle">先想意思，再揭晓</h2></div>
           <div class="review-progress-wrap">
             <span id="reviewProgressText">1 / 3</span>
             <div class="review-progress"><i id="reviewProgressBar"></i></div>
@@ -285,6 +333,25 @@
           </div>
         </div>
         <div class="review-body" id="reviewBody"></div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="challengeModal" hidden>
+      <section class="modal-card challenge-modal-card" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <div><span class="section-kicker">FRIEND CHALLENGE</span><h2>好友 10 词挑战</h2></div>
+          <button class="icon-button modal-close" data-close="challengeModal" aria-label="关闭">
+            <svg><use href="#icon-close"></use></svg>
+          </button>
+        </div>
+        <div class="challenge-modal-body">
+          <p>把下面的链接发给朋友。对方输入访客验证码后即可开始，答题结果不会记录到你的学习进度。</p>
+          <label>
+            <span>挑战链接</span>
+            <input id="challengeLink" readonly />
+          </label>
+          <button class="primary-button" id="copyChallengeButton">复制挑战链接</button>
+        </div>
       </section>
     </div>
 
